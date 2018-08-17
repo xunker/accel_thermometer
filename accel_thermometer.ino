@@ -12,6 +12,9 @@
 
 #include <Arduino.h>
 
+#include "SparkFunLIS3DH.h"
+LIS3DH myIMU( I2C_MODE, 0x18 ); //Default constructor is I2C, addr 0x19.
+
 #define I2C_ADDRESS 0x3C
 // #include <Wire.h>
 #include "SSD1306Ascii.h"
@@ -239,7 +242,8 @@ void on_item3_selected(MenuComponent* p_menu_component) {
 void on_item4_selected(MenuComponent* p_menu_component) {
     // oled.setCursor(0,1);
     oled.clear();
-    oled.print("Item4 Selected  ");
+    // oled.print("Item4 Selected  ");
+    print_temperature();
     delay(1500); // so we can look the result on the LCD
 }
 
@@ -259,6 +263,17 @@ void serial_print_help() {
     Serial.println("?: print this help");
     Serial.println("h: print this help");
     Serial.println("***************");
+}
+
+void print_temperature() {
+  oled.clear();
+  oled.println("Temperature:");
+  int8_t celcius = 25 - (-500 + myIMU.read10bitADC3());
+  oled.print(celcius);
+  oled.print("C ");
+
+  oled.print(((9*celcius)/5)+32);
+  oled.println("F");
 }
 
 void serial_handler() {
@@ -307,7 +322,20 @@ void setup() {
     // Use true, normal mode, since default for Adafruit display is remap mode.
     oled.displayRemap(displayRemapMode);
 
-    oled.print("Hello world!xxxxxxxxxxxxxxxxxx");
+    oled.println("Display Initialized");
+
+    myIMU.begin();
+    myIMU.settings.adcEnabled = 1;
+    //Note:  By also setting tempEnabled = 1, temperature data is available
+    //on ADC3.  Temperature *differences* can be read at a rate of
+    //1 degree C per unit of ADC3
+    // Datasheet says "T = 25", so  is this the difference from that?
+    // The baseline appears to be '500'. Heat makes the number go down (breath takes it to ~490)
+    // My guess is that `500` == 25C, because when I put my finger (which temperature is 31C)
+    // on the sensor then the reading drops to 492, and 500-492 roughly equals 31-25
+    // That means the sensor is only able to resolve 1.0 Degree C, no less.
+    myIMU.settings.tempEnabled = 1;
+    oled.println("Accelerometer Initialized");
 
     serial_print_help();
 
@@ -321,6 +349,74 @@ void setup() {
     ms.display();
 }
 
+#define ACCEL_READ 100 // read Accelerometer values every <this> milliseconds.
+unsigned long nextAccelRead = 0;
+
+#define MOVE_THRESHOLD 0.200
+#define TIME_THRESHOLD 500 // milliseconds
+unsigned int previousXTime = 0;
+// float previousXValue = 0;
+unsigned int previousYTime = 0;
+// float previousYValue = 0;
+
 void loop() {
     serial_handler();
+    unsigned long current = millis();
+    if (current > nextAccelRead) {
+      // oled.setCursor(0,0);
+      float currentXValue = myIMU.readFloatAccelX();
+      float currentYValue = myIMU.readFloatAccelY();
+      // oled.println(currentYValue, 4);
+
+      if (abs(currentYValue) > MOVE_THRESHOLD) {
+        if (previousYTime == 0) {
+          previousYTime = current;
+        } else if (current > (previousYTime + TIME_THRESHOLD)){
+          // trigger event
+          if (currentYValue > 0) {
+            // Move up
+            ms.prev();
+            ms.display();
+          } else if (currentYValue < 0) {
+            // Move down
+            ms.next();
+            ms.display();
+          }
+          Serial.println("Y Trigger");
+          previousYTime = 0;
+        }
+      }
+
+      if (abs(currentXValue) > MOVE_THRESHOLD) {
+        if (previousYTime == 0) {
+          previousYTime = current;
+        } else if (current > (previousYTime + TIME_THRESHOLD)){
+          // trigger event
+          if (currentXValue > 0) {
+            // select
+            ms.select();
+            ms.display();
+          } else if (currentXValue < 0) {
+            // back
+            ms.back();
+            ms.display();
+          }
+          Serial.println("X Trigger");
+          previousYTime = 0;
+        }
+      }
+
+      // previousYValue = currentYValue;
+
+      /*
+      read accel
+      if over move threshold...
+      ...if previous time is zero, set to now.
+      ...if previous time is not zero, see how long it has been.
+        ...if previous time > time threshold
+          ...trigger action
+          ...set time threshold to zero
+      */
+      nextAccelRead = current + ACCEL_READ;
+    }
 }
